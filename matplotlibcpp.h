@@ -398,6 +398,34 @@ PyObject* get_2darray(const std::vector<::std::vector<Numeric>>& v)
     return reinterpret_cast<PyObject *>(varray);
 }
 
+
+template<typename Numeric>
+PyObject* get_3darray(const std::vector<::std::vector<::std::vector<Numeric>>>& v)
+{
+    if (v.size() < 1) throw std::runtime_error("get_3d_array v too small");
+    if (v[0].size() < 1) throw std::runtime_error("get_3d_array v too small");
+
+    npy_intp vsize[3] = {static_cast<npy_intp>(v.size()),
+                         static_cast<npy_intp>(v[0].size()),
+                         static_cast<npy_intp>(v[0][0].size())};
+
+    PyArrayObject *varray =
+        (PyArrayObject *)PyArray_SimpleNew(3, vsize, NPY_DOUBLE);
+
+    double *vd_begin = static_cast<double *>(PyArray_DATA(varray));
+
+    for (const ::std::vector<::std::vector<Numeric>> &v_row : v) {
+      for(const ::std::vector<Numeric> &v_cell: v_row) {
+        if (v_cell.size() != static_cast<size_t>(vsize[2]))
+            throw std::runtime_error("Missmatched array size");
+        std::copy(v_cell.begin(), v_cell.end(), vd_begin);
+        vd_begin += vsize[2];
+      }
+    }
+
+    return reinterpret_cast<PyObject *>(varray);
+}
+
 #else // fallback if we don't have numpy: copy every element of the given vector
 
 template<typename Numeric>
@@ -477,11 +505,20 @@ template <typename Numeric>
 void plot_surface(const std::vector<::std::vector<Numeric>> &x,
                   const std::vector<::std::vector<Numeric>> &y,
                   const std::vector<::std::vector<Numeric>> &z,
+                  const std::vector<::std::vector<::std::vector<Numeric>>> &facecolors = std::vector<::std::vector<::std::vector<Numeric>>>(),
+                  size_t w = 0,
+                  size_t h = 0,
+                  const std::vector<Numeric> &angles = std::vector<Numeric>(),
                   const std::map<std::string, std::string> &keywords =
                       std::map<std::string, std::string>(),
                   const long fig_number=0)
 {
   detail::_interpreter::get();
+
+  if(angles.size() != 0 && angles.size() != 2) {
+      throw std::runtime_error("plot_surface: invalid angles");
+  }
+
 
   // We lazily load the modules here the first time this function is called
   // because I'm not sure that we can assume "matplotlib installed" implies
@@ -523,10 +560,16 @@ void plot_surface(const std::vector<::std::vector<Numeric>> &x,
   PyDict_SetItemString(kwargs, "rstride", PyInt_FromLong(1));
   PyDict_SetItemString(kwargs, "cstride", PyInt_FromLong(1));
 
-  PyObject *python_colormap_coolwarm = PyObject_GetAttrString(
-      detail::_interpreter::get().s_python_colormap, "coolwarm");
+  if(facecolors.size() == 0) {
+    PyObject *python_colormap_coolwarm = PyObject_GetAttrString(
+        detail::_interpreter::get().s_python_colormap, "coolwarm");
 
-  PyDict_SetItemString(kwargs, "cmap", python_colormap_coolwarm);
+    PyDict_SetItemString(kwargs, "cmap", python_colormap_coolwarm);
+  }
+  else {
+    PyObject *facecolorarray = detail::get_3darray(facecolors);
+    PyDict_SetItemString(kwargs, "facecolors", facecolorarray);
+  }
 
   for (std::map<std::string, std::string>::const_iterator it = keywords.begin();
        it != keywords.end(); ++it) {
@@ -540,19 +583,30 @@ void plot_surface(const std::vector<::std::vector<Numeric>> &x,
   }
 
   PyObject *fig_args = PyTuple_New(1);
+  PyObject *fig_kwargs = PyDict_New();
+  if(w != 0 && h != 0) {
+      const size_t dpi = 100;
+      PyObject* size = PyTuple_New(2);
+      PyTuple_SetItem(size, 0, PyFloat_FromDouble((double)w / dpi));
+      PyTuple_SetItem(size, 1, PyFloat_FromDouble((double)h / dpi));
+      PyDict_SetItemString(fig_kwargs, "figsize", size);
+      PyDict_SetItemString(fig_kwargs, "dpi", PyLong_FromSize_t(dpi));
+  }
   PyObject* fig = nullptr;
   PyTuple_SetItem(fig_args, 0, PyLong_FromLong(fig_number));
   PyObject *fig_exists =
     PyObject_CallObject(
     detail::_interpreter::get().s_python_function_fignum_exists, fig_args);
   if (!PyObject_IsTrue(fig_exists)) {
-    fig = PyObject_CallObject(detail::_interpreter::get().s_python_function_figure,
-      detail::_interpreter::get().s_python_empty_tuple);
+    fig = PyObject_Call(detail::_interpreter::get().s_python_function_figure,
+      detail::_interpreter::get().s_python_empty_tuple, fig_kwargs);
   } else {
-    fig = PyObject_CallObject(detail::_interpreter::get().s_python_function_figure,
-      fig_args);
+    fig = PyObject_Call(detail::_interpreter::get().s_python_function_figure,
+      fig_args, fig_kwargs);
   }
   Py_DECREF(fig_exists);
+  Py_DECREF(fig_kwargs);
+  Py_DECREF(fig_args);
   if (!fig) throw std::runtime_error("Call to figure() failed.");
 
   PyObject *gca_kwargs = PyDict_New();
@@ -576,6 +630,21 @@ void plot_surface(const std::vector<::std::vector<Numeric>> &x,
   PyObject *res = PyObject_Call(plot_surface, args, kwargs);
   if (!res) throw std::runtime_error("failed surface");
   Py_DECREF(plot_surface);
+
+  if(angles.size() != 0) {
+      PyObject *view_init = PyObject_GetAttrString(axis, "view_init");
+      if(!view_init) throw std::runtime_error("No view_init");
+      PyObject *angle_args = PyDict_New();
+      PyObject *angle_kwargs = PyDict_New();
+      PyDict_SetItemString(angle_kwargs, "elev", PyFloat_FromDouble(angles[0]));
+      PyDict_SetItemString(angle_kwargs, "azim", PyFloat_FromDouble(angles[1]));
+      PyObject *res = PyObject_Call(view_init, angle_args, angle_kwargs);
+      if(res)
+        Py_DECREF(res);
+      Py_DECREF(angle_kwargs);
+      Py_DECREF(angle_kwargs);
+      Py_DECREF(view_init);
+  }
 
   Py_DECREF(axis);
   Py_DECREF(args);
