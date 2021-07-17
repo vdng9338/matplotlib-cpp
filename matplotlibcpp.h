@@ -915,10 +915,12 @@ bool hist(const std::vector<Numeric>& y, long bins=10,std::string color="b",
 #ifndef WITHOUT_NUMPY
 namespace detail {
 
-inline void imshow(void *ptr, const NPY_TYPES type, const int rows, const int columns, const int colors, const std::map<std::string, std::string> &keywords, PyObject** out)
+inline void imshow(void *ptr, const NPY_TYPES type, const int rows, const int columns, const int colors, const std::vector<double> &extent = std::vector<double>(), const std::map<std::string, std::string> &keywords, PyObject** out)
 {
     assert(type == NPY_UINT8 || type == NPY_FLOAT);
     assert(colors == 1 || colors == 3 || colors == 4);
+    if(extent.size() != 0 && extent.size() != 4)
+        throw std::runtime_error("imshow(): invalid extent");
 
     detail::_interpreter::get();
 
@@ -932,6 +934,12 @@ inline void imshow(void *ptr, const NPY_TYPES type, const int rows, const int co
     for(std::map<std::string, std::string>::const_iterator it = keywords.begin(); it != keywords.end(); ++it)
     {
         PyDict_SetItemString(kwargs, it->first.c_str(), PyUnicode_FromString(it->second.c_str()));
+    }
+    if(extent.size() != 0) {
+        PyObject* exttuple = PyTuple_New(4);
+        for(int i = 0; i < 4; i++)
+            PyTuple_SetItem(exttuple, i, PyFloat_FromDouble(extent[i]));
+        PyDict_SetItemString(kwargs, "extent", exttuple);
     }
 
     PyObject *res = PyObject_Call(detail::_interpreter::get().s_python_function_imshow, args, kwargs);
@@ -947,14 +955,14 @@ inline void imshow(void *ptr, const NPY_TYPES type, const int rows, const int co
 
 } // namespace detail
 
-inline void imshow(const unsigned char *ptr, const int rows, const int columns, const int colors, const std::map<std::string, std::string> &keywords = {}, PyObject** out = nullptr)
+inline void imshow(const unsigned char *ptr, const int rows, const int columns, const int colors, const std::vector<double> &extent = std::vector<double>(), const std::map<std::string, std::string> &keywords = {}, PyObject** out = nullptr)
 {
-    detail::imshow((void *) ptr, NPY_UINT8, rows, columns, colors, keywords, out);
+    detail::imshow((void *) ptr, NPY_UINT8, rows, columns, colors, extent, keywords, out);
 }
 
-inline void imshow(const float *ptr, const int rows, const int columns, const int colors, const std::map<std::string, std::string> &keywords = {}, PyObject** out = nullptr)
+inline void imshow(const float *ptr, const int rows, const int columns, const int colors, const std::vector<double> &extent = std::vector<double>(), const std::map<std::string, std::string> &keywords = {}, PyObject** out = nullptr)
 {
-    detail::imshow((void *) ptr, NPY_FLOAT, rows, columns, colors, keywords, out);
+    detail::imshow((void *) ptr, NPY_FLOAT, rows, columns, colors, extent, keywords, out);
 }
 
 #ifdef WITH_OPENCV
